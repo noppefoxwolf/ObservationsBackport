@@ -1,11 +1,14 @@
 import Observation
 import Testing
 
+//typealias Observations = Observation.Observations
+
 @testable import ObservationsBackport
 typealias Observations = ObservationsBackport
 
+@MainActor
 @Observable
-final class Counter: @unchecked Sendable {
+final class Counter {
     var value: Int
 
     init(_ value: Int = 0) {
@@ -17,8 +20,9 @@ enum TestError: Error, Equatable {
     case boom
 }
 
+@MainActor
 @Observable
-final class Toggle: @unchecked Sendable {
+final class Toggle {
     var value: Int
     var isDone: Bool
 
@@ -29,6 +33,7 @@ final class Toggle: @unchecked Sendable {
 }
 
 
+@MainActor
 @Suite
 struct ObservationsTests {
     @Test func yieldsInitialValue() async {
@@ -103,6 +108,5 @@ struct ObservationsTests {
             #expect(error == .boom)
         }
     }
-
 }
 
