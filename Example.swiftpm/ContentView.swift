@@ -1,23 +1,23 @@
-import UIKit
 import ObservationsBackport
+import UIKit
 
 class ViewController: UIViewController {
     let label: UILabel = UILabel()
     let button: UIButton = UIButton(configuration: .filled())
-    
+
     let state = ViewControllerState()
-    
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        
+
         label.text = "Hello, World!"
         button.configuration?.title = "Button"
-        
+
         let stackView = UIStackView(
             arrangedSubviews: [
                 label,
-                button
+                button,
             ]
         )
         stackView.axis = .vertical
@@ -36,11 +36,14 @@ class ViewController: UIViewController {
                 constant: 20
             ),
         ])
-        
-        button.addAction(UIAction { _ in
-            self.state.count += 1
-        }, for: .primaryActionTriggered)
-        
+
+        button.addAction(
+            UIAction { _ in
+                self.state.count += 1
+            },
+            for: .primaryActionTriggered
+        )
+
         Task {
             for await count in ObservationsBackport({ self.state.count }) {
                 self.label.text = "\(count)"

@@ -9,7 +9,8 @@ import Observation
 /// - Parameters:
 ///   - Element: The type of elements produced by the async sequence.
 ///   - Failure: The type of error that can be thrown during element production.
-public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable where Element: Sendable, Failure: Error {
+public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable
+where Element: Sendable, Failure: Error {
     // The element type of the sequence.
     public typealias Element = Element
 
@@ -18,7 +19,7 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
 
     /// Represents the iteration state of the async sequence when using
     /// the `untilFinished` initializer.
-    public enum Iteration : Sendable{
+    public enum Iteration: Sendable {
         case next(Element)
         case finish
     }
@@ -41,7 +42,8 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
     ///
     /// - Parameter emit: A closure that synchronously produces an element.
     public init(
-        @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Element
+        @_inheritActorContext _ emit:
+            @escaping @isolated(any) @Sendable () throws(Failure) -> Element
     ) {
         self.mode = .element(emit)
     }
@@ -52,7 +54,8 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
     /// - Parameter emit: A closure that returns either a next element or a
     ///   finish signal.
     public static func untilFinished(
-        @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
+        @_inheritActorContext _ emit:
+            @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
     ) -> ObservationsBackport<Element, Failure> {
         ObservationsBackport(mode: .iteration(emit))
     }

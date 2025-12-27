@@ -34,11 +34,16 @@ protocol ObservationsAPI {
     associatedtype Element: Sendable
     associatedtype Failure: Error
     associatedtype Iteration: Sendable
-    associatedtype AsyncIterator: AsyncIteratorProtocol where AsyncIterator.Element == Element, AsyncIterator.Failure == Failure
+    associatedtype AsyncIterator: AsyncIteratorProtocol
+    where AsyncIterator.Element == Element, AsyncIterator.Failure == Failure
 
-    init(@_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Element)
+    init(
+        @_inheritActorContext _ emit:
+            @escaping @isolated(any) @Sendable () throws(Failure) -> Element
+    )
     static func untilFinished(
-        @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
+        @_inheritActorContext _ emit:
+            @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
     ) -> Self
 
     func makeAsyncIterator() -> AsyncIterator
