@@ -9,7 +9,7 @@ import _Concurrency
 /// - Parameters:
 ///   - Element: The type of elements produced by the async sequence.
 ///   - Failure: The type of error that can be thrown during element production.
-public struct ObservationsBackport<Element, Failure>: AsyncSequence, @unchecked Sendable where Element: Sendable, Failure: Error {
+public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable where Element: Sendable, Failure: Error {
     // The element type of the sequence.
     public typealias Element = Element
 
@@ -24,9 +24,9 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, @unchecked 
     }
 
     /// Internal storage for how this sequence produces elements.
-    fileprivate enum Mode {
-        case element(@isolated(any) () throws(Failure) -> Element)
-        case iteration(@isolated(any) () throws(Failure) -> Iteration)
+    fileprivate enum Mode: Sendable {
+        case element(@isolated(any) @Sendable () throws(Failure) -> Element)
+        case iteration(@isolated(any) @Sendable () throws(Failure) -> Iteration)
     }
 
     fileprivate let mode: Mode
@@ -41,7 +41,7 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, @unchecked 
     ///
     /// - Parameter emit: A closure that synchronously produces an element.
     public init(
-        @_inheritActorContext _ emit: @escaping @isolated(any) () throws(Failure) -> Element
+        @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Element
     ) {
         self.mode = .element(emit)
     }
@@ -52,7 +52,7 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, @unchecked 
     /// - Parameter emit: A closure that returns either a next element or a
     ///   finish signal.
     public static func untilFinished(
-        @_inheritActorContext _ emit: @escaping @isolated(any) () throws(Failure) -> Iteration
+        @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
     ) -> ObservationsBackport<Element, Failure> {
         ObservationsBackport(mode: .iteration(emit))
     }
