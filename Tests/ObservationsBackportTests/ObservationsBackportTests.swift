@@ -41,7 +41,7 @@ struct ObservationsTests {
         let observations = Observations { counter.value }
         var iterator = observations.makeAsyncIterator()
 
-        let initial = await iterator.next()
+        let initial = await iterator.next(isolation: #isolation)
         #expect(initial == 0)
     }
 
@@ -50,13 +50,13 @@ struct ObservationsTests {
         let observations = Observations { counter.value }
         var iterator = observations.makeAsyncIterator()
 
-        _ = await iterator.next()
+        _ = await iterator.next(isolation: #isolation)
 
         counter.value = 1
-        let first = await iterator.next()
+        let first = await iterator.next(isolation: #isolation)
 
         counter.value = 2
-        let second = await iterator.next()
+        let second = await iterator.next(isolation: #isolation)
 
         #expect(first == 1)
         #expect(second == 2)
@@ -72,18 +72,18 @@ struct ObservationsTests {
         }
         var iterator = observations.makeAsyncIterator()
 
-        let initial = await iterator.next()
+        let initial = await iterator.next(isolation: #isolation)
         #expect(initial == 0)
 
         toggle.value = 1
-        let updated = await iterator.next()
+        let updated = await iterator.next(isolation: #isolation)
         #expect(updated == 1)
 
         toggle.isDone = true
-        let finished = await iterator.next()
+        let finished = await iterator.next(isolation: #isolation)
         #expect(finished == nil)
 
-        let afterFinish = await iterator.next()
+        let afterFinish = await iterator.next(isolation: #isolation)
         #expect(afterFinish == nil)
     }
 
@@ -97,16 +97,15 @@ struct ObservationsTests {
         })
         var iterator = observations.makeAsyncIterator()
 
-        let initial = try? await iterator.next()
+        let initial = try? await iterator.next(isolation: #isolation)
         #expect(initial == 0)
 
         counter.value = -1
         do {
-            _ = try await iterator.next()
+            _ = try await iterator.next(isolation: #isolation)
             #expect(Bool(false))
         } catch let error {
             #expect(error == .boom)
         }
     }
 }
-

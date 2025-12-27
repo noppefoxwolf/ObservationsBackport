@@ -4,15 +4,27 @@ import Observation
 private func eraseIsolation<T, E: Error>(
     _ emit: @escaping @isolated(any) @Sendable () throws(E) -> T
 ) -> @Sendable () throws(E) -> T {
-    // Backport: erase dynamic isolation while relying on callers to stay on the same actor.
+    // Backport shim: call only after verifying isolation compatibility.
     unsafeBitCast(emit, to: (@Sendable () throws(E) -> T).self)
+}
+
+@inline(__always)
+private func sameIsolation(_ lhs: (any Actor)?, _ rhs: (any Actor)?) -> Bool {
+    switch (lhs, rhs) {
+    case (nil, nil):
+        return true
+    case let (lhs?, rhs?):
+        return ObjectIdentifier(lhs as AnyObject) == ObjectIdentifier(rhs as AnyObject)
+    default:
+        return false
+    }
 }
 
 /// An asynchronous sequence generated from a closure that tracks changes of `@Observable` types.
 public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable where Element: Sendable, Failure: Error {
     fileprivate enum Mode: Sendable {
-        case element(@Sendable () throws(Failure) -> Element)
-        case iteration(@Sendable () throws(Failure) -> Iteration)
+        case element(@isolated(any) @Sendable () throws(Failure) -> Element)
+        case iteration(@isolated(any) @Sendable () throws(Failure) -> Iteration)
     }
 
     public enum Iteration: Sendable {
@@ -24,14 +36,14 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
 
     /// Constructs an asynchronous sequence for a given closure by tracking changes of `@Observable` types.
     public init(@_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Element) {
-        self.mode = .element(eraseIsolation(emit))
+        self.mode = .element(emit)
     }
 
     /// Constructs an asynchronous sequence for a given closure by tracking changes of `@Observable` types.
     public static func untilFinished(
         @_inheritActorContext _ emit: @escaping @isolated(any) @Sendable () throws(Failure) -> Iteration
     ) -> ObservationsBackport<Element, Failure> {
-        ObservationsBackport(mode: .iteration(eraseIsolation(emit)))
+        ObservationsBackport(mode: .iteration(emit))
     }
 
     private init(mode: Mode) {
@@ -52,14 +64,9 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
             self.mode = mode
         }
 
-        public mutating func next() async throws(Failure) -> Element? {
-            try await next(isolation: #isolation)
-        }
-
         public mutating func next(
             isolation iterationIsolation: isolated (any Actor)? = #isolation
         ) async throws(Failure) -> Element? {
-            _ = iterationIsolation
             guard !finished else { return nil }
 
             if started {
@@ -78,9 +85,17 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
                         let iteration: Iteration
                         switch mode {
                         case .element(let emit):
-                            iteration = .next(try emit())
+                            if let required = emit.isolation {
+                                precondition(sameIsolation(required, iterationIsolation), "ObservationsBackport.next must be called on the emit isolation.")
+                            }
+                            let emitSync = eraseIsolation(emit)
+                            iteration = .next(try emitSync())
                         case .iteration(let emit):
-                            iteration = try emit()
+                            if let required = emit.isolation {
+                                precondition(sameIsolation(required, iterationIsolation), "ObservationsBackport.next must be called on the emit isolation.")
+                            }
+                            let emitSync = eraseIsolation(emit)
+                            iteration = try emitSync()
                         }
                         return Result<Iteration, Failure>.success(iteration)
                     } catch let error as Failure {
