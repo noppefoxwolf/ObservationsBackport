@@ -1,4 +1,4 @@
-import _Concurrency
+import Observation
 
 /// An async sequence that yields elements when an observed value changes.
 ///
