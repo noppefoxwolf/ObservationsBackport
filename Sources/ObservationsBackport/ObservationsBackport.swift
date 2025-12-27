@@ -1,149 +1,100 @@
-import Observation
+import _Concurrency
 
-/// An asynchronous sequence generated from a closure that tracks changes of `@Observable` types.
-public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable where Element: Sendable, Failure: Error {
-    fileprivate enum Mode: Sendable {
-        case element(emit: @Sendable () throws(Failure) -> Element, isolation: (any Actor)?)
-        case iteration(emit: @Sendable () throws(Failure) -> Iteration, isolation: (any Actor)?)
-    }
+/// An async sequence that yields elements when an observed value changes.
+///
+/// This type is a backport-style utility similar to `Observation.Observations`,
+/// but implemented only with Swift Concurrency primitives. It focuses on
+/// correct actor isolation by using `@isolated(any)`.
+///
+/// - Parameters:
+///   - Element: The type of elements produced by the async sequence.
+///   - Failure: The type of error that can be thrown during element production.
+public struct ObservationsBackport<Element, Failure>: AsyncSequence, @unchecked Sendable where Element: Sendable, Failure: Error {
+    // The element type of the sequence.
+    public typealias Element = Element
 
-    public enum Iteration: Sendable {
+    // The error type used by the sequence.
+    public typealias Failure = Failure
+
+    /// Represents the iteration state of the async sequence when using
+    /// the `untilFinished` initializer.
+    public enum Iteration : Sendable{
         case next(Element)
         case finish
     }
 
-    private let mode: Mode
+    /// Internal storage for how this sequence produces elements.
+    fileprivate enum Mode {
+        case element(@isolated(any) () throws(Failure) -> Element)
+        case iteration(@isolated(any) () throws(Failure) -> Iteration)
+    }
 
-    /// Constructs an asynchronous sequence for a given closure by tracking changes of `@Observable` types.
+    fileprivate let mode: Mode
+
+    /// Creates an observations async sequence that produces elements from the
+    /// provided closure.
+    ///
+    /// The closure is `@isolated(any)`, which means it is isolated to whichever
+    /// actor it is created on. Thanks to `@_inheritActorContext`, it can freely
+    /// capture `@MainActor` or other actor-isolated state without triggering
+    /// Sendable diagnostics.
+    ///
+    /// - Parameter emit: A closure that synchronously produces an element.
     public init(
-        isolation: isolated (any Actor)? = #isolation,
-        _ emit: @escaping @Sendable () throws(Failure) -> Element
+        @_inheritActorContext _ emit: @escaping @isolated(any) () throws(Failure) -> Element
     ) {
-        self.mode = .element(emit: emit, isolation: isolation)
+        self.mode = .element(emit)
     }
 
-    /// Constructs an asynchronous sequence for a given closure by tracking changes of `@Observable` types.
+    /// Creates an observations async sequence that continues to produce
+    /// elements until it returns `.finish`.
+    ///
+    /// - Parameter emit: A closure that returns either a next element or a
+    ///   finish signal.
     public static func untilFinished(
-        isolation: isolated (any Actor)? = #isolation,
-        _ emit: @escaping @Sendable () throws(Failure) -> Iteration
+        @_inheritActorContext _ emit: @escaping @isolated(any) () throws(Failure) -> Iteration
     ) -> ObservationsBackport<Element, Failure> {
-        ObservationsBackport(mode: .iteration(emit: emit, isolation: isolation))
+        ObservationsBackport(mode: .iteration(emit))
     }
 
+    /// Private designated initializer from a `Mode`.
     private init(mode: Mode) {
         self.mode = mode
     }
 
-    public func makeAsyncIterator() -> Iterator {
-        Iterator(mode: mode)
-    }
+    /// The type of the iterator that produces elements of the async sequence.
+    public struct AsyncIterator: AsyncIteratorProtocol {
+        fileprivate var mode: Mode
+        fileprivate var finished = false
 
-    public struct Iterator: AsyncIteratorProtocol {
-        private let mode: Mode
-        private let signal = ChangeSignal()
-        private var started = false
-        private var finished = false
+        /// Advances to the next element in the sequence.
+        ///
+        /// This method is `async` and simply `await`s the underlying
+        /// `@isolated(any)` closure. The runtime will hop to the appropriate
+        /// actor as needed.
+        public mutating func next() async throws(Failure) -> Element? {
+            if finished { return nil }
 
-        fileprivate init(mode: Mode) {
-            self.mode = mode
-        }
+            switch mode {
+            case .element(let emit):
+                // Just call the producer and return its result.
+                return try await emit()
 
-        public mutating func next(
-            isolation iterationIsolation: isolated (any Actor)? = #isolation
-        ) async throws(Failure) -> Element? {
-            guard !finished else { return nil }
-
-            if started {
-                await signal.wait()
-            } else {
-                started = true
-            }
-
-            guard !finished else { return nil }
-
-            let mode = mode
-            let signal = signal
-            let result: Result<Iteration, Failure> = withObservationTracking(
-                {
-                    switch mode {
-                    case let .element(emit, requiredIsolation):
-                        if let required = requiredIsolation {
-                            precondition(required === iterationIsolation, "ObservationsBackport.next must be called on the emit isolation.")
-                        }
-                        do {
-                            return .success(.next(try emit()))
-                        } catch let error as Failure {
-                            return .failure(error)
-                        } catch {
-                            preconditionFailure("Unexpected error type: \(error)")
-                        }
-
-                    case let .iteration(emit, requiredIsolation):
-                        if let required = requiredIsolation {
-                            precondition(required === iterationIsolation, "ObservationsBackport.next must be called on the emit isolation.")
-                        }
-                        do {
-                            return .success(try emit())
-                        } catch let error as Failure {
-                            return .failure(error)
-                        } catch {
-                            preconditionFailure("Unexpected error type: \(error)")
-                        }
-                    }
-                },
-                onChange: { [signal] in
-                    Task { await signal.signal() }
+            case .iteration(let emit):
+                let iteration = try await emit()
+                switch iteration {
+                case .next(let element):
+                    return element
+                case .finish:
+                    finished = true
+                    return nil
                 }
-            )
-
-            switch result {
-            case .success(.next(let element)):
-                return element
-            case .success(.finish):
-                finished = true
-                Task { await signal.finish() }
-                return nil
-            case .failure(let error):
-                finished = true
-                Task { await signal.finish() }
-                throw error
             }
         }
     }
 
-    public typealias AsyncIterator = ObservationsBackport<Element, Failure>.Iterator
-}
-
-private actor ChangeSignal {
-    private var pending = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func wait() async {
-        if pending > 0 {
-            pending -= 1
-            return
-        }
-
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
-    }
-
-    func signal() {
-        if !waiters.isEmpty {
-            let continuation = waiters.removeFirst()
-            continuation.resume()
-        } else {
-            pending += 1
-        }
-    }
-
-    func finish() {
-        let continuations = waiters
-        waiters.removeAll()
-        pending = 0
-        for continuation in continuations {
-            continuation.resume()
-        }
+    /// Returns an iterator over the elements of the async sequence.
+    public func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(mode: mode)
     }
 }
