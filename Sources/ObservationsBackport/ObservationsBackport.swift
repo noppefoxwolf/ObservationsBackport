@@ -8,18 +8,6 @@ private func eraseIsolation<T, E: Error>(
     unsafeBitCast(emit, to: (@Sendable () throws(E) -> T).self)
 }
 
-@inline(__always)
-private func sameIsolation(_ lhs: (any Actor)?, _ rhs: (any Actor)?) -> Bool {
-    switch (lhs, rhs) {
-    case (nil, nil):
-        return true
-    case let (lhs?, rhs?):
-        return ObjectIdentifier(lhs as AnyObject) == ObjectIdentifier(rhs as AnyObject)
-    default:
-        return false
-    }
-}
-
 /// An asynchronous sequence generated from a closure that tracks changes of `@Observable` types.
 public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable where Element: Sendable, Failure: Error {
     fileprivate enum Mode: Sendable {
@@ -86,13 +74,13 @@ public struct ObservationsBackport<Element, Failure>: AsyncSequence, Sendable wh
                         switch mode {
                         case .element(let emit):
                             if let required = emit.isolation {
-                                precondition(sameIsolation(required, iterationIsolation), "ObservationsBackport.next must be called on the emit isolation.")
+                                precondition(required === iterationIsolation, "ObservationsBackport.next must be called on the emit isolation.")
                             }
                             let emitSync = eraseIsolation(emit)
                             iteration = .next(try emitSync())
                         case .iteration(let emit):
                             if let required = emit.isolation {
-                                precondition(sameIsolation(required, iterationIsolation), "ObservationsBackport.next must be called on the emit isolation.")
+                                precondition(required === iterationIsolation, "ObservationsBackport.next must be called on the emit isolation.")
                             }
                             let emitSync = eraseIsolation(emit)
                             iteration = try emitSync()
