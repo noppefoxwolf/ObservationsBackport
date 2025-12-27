@@ -67,29 +67,83 @@ where Element: Sendable, Failure: Error {
 
     /// The type of the iterator that produces elements of the async sequence.
     public struct AsyncIterator: AsyncIteratorProtocol {
+        private struct ChangeIterator: @unchecked Sendable {
+            var iterator: AsyncStream<Void>.AsyncIterator
+        }
+
         fileprivate var mode: Mode
         fileprivate var finished = false
+        private var didStart = false
+        private var changeIterator: ChangeIterator
+        private let changeContinuation: AsyncStream<Void>.Continuation
+
+        fileprivate init(mode: Mode) {
+            var continuation: AsyncStream<Void>.Continuation!
+            let stream = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) {
+                continuation = $0
+            }
+            self.changeIterator = ChangeIterator(iterator: stream.makeAsyncIterator())
+            self.changeContinuation = continuation
+            self.mode = mode
+        }
 
         /// Advances to the next element in the sequence.
         ///
-        /// This method is `async` and simply `await`s the underlying
-        /// `@isolated(any)` closure. The runtime will hop to the appropriate
-        /// actor as needed.
+        /// This method registers observation tracking and waits for changes
+        /// before producing the next value.
         public mutating func next() async throws(Failure) -> Element? {
+            try await next(isolation: nil)
+        }
+
+        /// Advances to the next element in the sequence with explicit actor isolation.
+        public mutating func next(
+            isolation iterationIsolation: isolated (any Actor)? = #isolation
+        ) async throws(Failure) -> Element? {
             if finished { return nil }
+
+            if didStart {
+                _ = await changeIterator.iterator.next(isolation: iterationIsolation)
+            }
+
+            let continuation = changeContinuation
+            let onChange: @Sendable () -> Void = {
+                continuation.yield(())
+            }
+
+            func trackedValue<T>(
+                from emit: @escaping @isolated(any) @Sendable () throws(Failure) -> T
+            ) throws(Failure) -> T {
+                // The iterator's isolation parameter guarantees we're on the emit actor.
+                if let iterationIsolation {
+                    iterationIsolation.preconditionIsolated()
+                }
+                typealias UnsafeEmit = @Sendable () throws(Failure) -> T
+                let unsafeEmit = unsafeBitCast(emit, to: UnsafeEmit.self)
+                func apply() -> Result<T, Failure> {
+                    do {
+                        return .success(try unsafeEmit())
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+                return try withObservationTracking(apply, onChange: onChange).get()
+            }
 
             switch mode {
             case .element(let emit):
-                // Just call the producer and return its result.
-                return try await emit()
+                let value = try trackedValue(from: emit)
+                didStart = true
+                return value
 
             case .iteration(let emit):
-                let iteration = try await emit()
+                let iteration = try trackedValue(from: emit)
+                didStart = true
                 switch iteration {
                 case .next(let element):
                     return element
                 case .finish:
                     finished = true
+                    changeContinuation.finish()
                     return nil
                 }
             }
